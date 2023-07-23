@@ -4,21 +4,85 @@ use sdl2::event::{Event};
 use sdl2::video::{GLProfile, SwapInterval};
 use sdl2::keyboard::Keycode;
 use sdl2::mouse::MouseButton;
+use sdl2_sys::{SDL_DisplayMode, SDL_GetMouseState, SDL_GetKeyboardState, SDL_Scancode};
 use std::mem::size_of;
-use gl::types::*;
-use std::fs;
 use std::process::exit;
+use gl::types::*;
 use glm::{vec2, vec3, mat4};
 use glm::ext::{translate, scale};
-use sdl2_sys::{SDL_DisplayMode, SDL_GetMouseState, SDL_GetKeyboardState, SDL_Scancode};
 use screenshots::Screen;
 
-fn load_vertex_shader(path: &str) -> Result<GLuint, String> {
-    let mut vertex_shader_source = fs::read_to_string(path).unwrap();
-    vertex_shader_source.push('\0');
+const DEFAULT_VERT: &str = "
+    #version 330 core
+    layout (location = 0) in vec3 aPos;
+    layout (location = 1) in vec2 aTexCoord;
+
+    out vec2 texCoord;
+
+    uniform mat4 transform;
+
+    void main()
+    {
+        gl_Position = transform * vec4(aPos, 1.0);
+        texCoord = aTexCoord;
+    }
+\0";
+
+const DEFAULT_FRAG: &str = "
+    #version 330 core
+
+    in vec2 texCoord;
+
+    uniform sampler2D texture1;
+
+    void main()
+    {
+        gl_FragColor = texture(texture1, vec2(texCoord.x, -texCoord.y));
+    }
+\0";
+
+const FLASHLIGHT_VERT: &str = "
+    #version 330 core
+    layout (location = 0) in vec3 aPos;
+    layout (location = 1) in vec2 aTexCoord;
+
+    out vec2 texCoord;
+    out vec4 pos;
+
+    uniform mat4 transform;
+
+    void main()
+    {
+        gl_Position = transform * vec4(aPos, 1.0);
+        pos = gl_Position;
+        texCoord = aTexCoord;
+    }
+\0";
+
+const FLASHLIGHT_FRAG: &str = "
+    #version 330 core
+
+    in vec2 texCoord;
+    in vec4 pos;
+
+    uniform sampler2D texture1;
+    uniform vec2 cursorPos;
+    uniform float radius;
+    uniform vec2 resolution;
+
+    void main()
+    {
+        if (pow((pos.x - cursorPos.x) * (resolution.x / resolution.y), 2.0) + pow(-pos.y - cursorPos.y, 2.0) > radius * radius)
+            gl_FragColor = mix(texture(texture1, vec2(texCoord.x, -texCoord.y)), vec4(0.0, 0.0, 0.0, 1.0), 0.7);
+        else
+            gl_FragColor = texture(texture1, vec2(texCoord.x, -texCoord.y));
+    }
+\0";
+
+fn compile_vertex_shader(source: &str) -> Result<GLuint, String> {
     unsafe {
         let vertex_shader = gl::CreateShader(gl::VERTEX_SHADER);
-        gl::ShaderSource(vertex_shader, 1, &(vertex_shader_source.as_ptr() as *const i8) as *const *const GLchar, std::ptr::null());
+        gl::ShaderSource(vertex_shader, 1, &(source.as_ptr() as *const i8) as *const *const GLchar, std::ptr::null());
         gl::CompileShader(vertex_shader);
 
         let mut success = 0;
@@ -33,12 +97,10 @@ fn load_vertex_shader(path: &str) -> Result<GLuint, String> {
     }
 }
 
-fn load_fragment_shader(path: &str) -> Result<GLuint, String> {
-    let mut fragment_shader_source = fs::read_to_string(path).unwrap();
-    fragment_shader_source.push('\0');
+fn compile_fragment_shader(source: &str) -> Result<GLuint, String> {
     unsafe {
         let fragment_shader = gl::CreateShader(gl::FRAGMENT_SHADER);
-        gl::ShaderSource(fragment_shader, 1, &(fragment_shader_source.as_ptr() as *const i8) as *const *const GLchar, std::ptr::null());
+        gl::ShaderSource(fragment_shader, 1, &(source.as_ptr() as *const i8) as *const *const GLchar, std::ptr::null());
         gl::CompileShader(fragment_shader);
 
         let mut success = 0;
@@ -53,12 +115,12 @@ fn load_fragment_shader(path: &str) -> Result<GLuint, String> {
     }
 }
 
-fn load_program(vertex_shader_path: &str, fragment_shader_path: &str) -> Result<GLuint, String> {
-    let vertex_shader = match load_vertex_shader(vertex_shader_path) {
+fn compile_program(vertex_shader_source: &str, fragment_shader_source: &str) -> Result<GLuint, String> {
+    let vertex_shader = match compile_vertex_shader(vertex_shader_source) {
         Err(err) => return Err(err),
         Ok(shader) => shader,
     };
-    let fragment_shader = match load_fragment_shader(fragment_shader_path) {
+    let fragment_shader = match compile_fragment_shader(fragment_shader_source) {
         Err(err) => return Err(err),
         Ok(shader) => shader,
     };
@@ -141,7 +203,7 @@ fn main() {
          1.0   ,  1.0, 0.0, 1.0, 1.0,
     ];
 
-    let shader_program = match load_program("./shaders/vertex.glsl", "./shaders/fragment.glsl") {
+    let shader_program = match compile_program(DEFAULT_VERT, DEFAULT_FRAG) {
         Err(err) => {
             eprintln!("{}", err);
             exit(1);
@@ -149,7 +211,7 @@ fn main() {
         Ok(program) => program,
     };
 
-    let flashlight_shader = match load_program("./shaders/flashlight_vert.glsl", "./shaders/flashlight_frag.glsl") {
+    let flashlight_shader = match compile_program(FLASHLIGHT_VERT, FLASHLIGHT_FRAG) {
         Err(err) => {
             eprintln!("{}", err);
             exit(1);
